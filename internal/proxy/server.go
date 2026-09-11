@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -52,6 +54,10 @@ func New(logger *slog.Logger, user, pass string) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		s.handleConnect(w, r)
+		return
+	}
 	if r.URL.IsAbs() && r.URL.Host != "" {
 		s.handleForward(w, r)
 		return
@@ -119,6 +125,104 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		s.logger.Debug("copy forward response failed", "err", err)
+	}
+}
+
+func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.authorized(r) {
+		s.writeProxyAuthRequired(w)
+		return
+	}
+
+	target := r.RequestURI
+	if target == "" {
+		target = r.Host
+	}
+	host, port, err := splitAuthority(target, 443)
+	if err != nil {
+		s.logger.Debug("invalid connect authority", "authority", target, "err", err)
+		s.writePlain(w, http.StatusBadRequest, "bad request")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), s.dialTimeout)
+	defer cancel()
+	upstream, err := s.dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		s.logger.Debug("connect upstream failed", "host", host, "port", port, "err", err)
+		s.writePlain(w, http.StatusBadGateway, "bad gateway")
+		return
+	}
+	defer upstream.Close()
+
+	controller := http.NewResponseController(w)
+	clientConn, buffered, err := controller.Hijack()
+	if err != nil {
+		s.logger.Debug("hijack failed", "err", err)
+		return
+	}
+	defer clientConn.Close()
+
+	started := time.Now()
+	if _, err := io.WriteString(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		s.logger.Debug("write connect response failed", "err", err)
+		return
+	}
+	// net/http may have read TLS-client-hello bytes past the CONNECT headers
+	// before the hijack; flush exactly those buffered bytes before tunneling.
+	if buffered != nil && buffered.Reader.Buffered() > 0 {
+		if _, err := io.CopyN(upstream, buffered, int64(buffered.Reader.Buffered())); err != nil {
+			s.logger.Debug("copy buffered connect bytes failed", "err", err)
+			return
+		}
+	}
+
+	// Join without WaitGroup: first copier finishing signals us to force-close
+	// both conns, which unblocks the other copier's pending read, then we wait
+	// for its signal so no goroutine outlives the handler.
+	done := make(chan struct{}, 2)
+	go s.copyTunnel("client_to_upstream", upstream, clientConn, done)
+	go s.copyTunnel("upstream_to_client", clientConn, upstream, done)
+	<-done
+	_ = clientConn.Close()
+	_ = upstream.Close()
+	<-done
+	s.logger.Info("tunnel closed", "target", target, "duration", time.Since(started).String())
+}
+
+func (s *Server) copyTunnel(direction string, dst io.Writer, src net.Conn, done chan<- struct{}) {
+	defer func() { done <- struct{}{} }()
+	bytesCopied, err := copyIdle(dst, src, s.tunnelIdleTimeout)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+		s.logger.Debug("tunnel copy stopped", "direction", direction, "bytes", bytesCopied, "err", err)
+		return
+	}
+	s.logger.Debug("tunnel copy closed", "direction", direction, "bytes", bytesCopied)
+}
+
+func copyIdle(dst io.Writer, src net.Conn, idle time.Duration) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		// Per-read deadline: each successful read restarts the idle window, so
+		// active tunnels are never killed; only 30s of silence times out.
+		if err := src.SetReadDeadline(time.Now().Add(idle)); err != nil {
+			return total, err
+		}
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			written, writeErr := dst.Write(buf[:n])
+			total += int64(written)
+			if writeErr != nil {
+				return total, writeErr
+			}
+			if written != n {
+				return total, io.ErrShortWrite
+			}
+		}
+		if readErr != nil {
+			return total, readErr
+		}
 	}
 }
 

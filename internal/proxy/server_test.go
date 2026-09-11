@@ -1,12 +1,15 @@
 package proxy
 
 import (
+	"bufio"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPublicSurface(t *testing.T) {
@@ -155,4 +158,130 @@ func TestForwardUpstreamError(t *testing.T) {
 func newTestServer() *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return New(logger, "u", "p")
+}
+
+func TestConnectRequiresAuth(t *testing.T) {
+	ts := httptest.NewServer(newTestServer())
+	defer ts.Close()
+
+	conn := dialTestServer(t, ts)
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"); err != nil {
+		t.Fatalf("write connect request: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	line := readStatusLine(t, reader)
+	if !strings.Contains(line, "407") {
+		t.Fatalf("status line = %q; want 407", line)
+	}
+}
+
+func TestConnectTunnelEcho(t *testing.T) {
+	echo := newEchoServer(t)
+	defer echo.Close()
+
+	ts := httptest.NewServer(newTestServer())
+	defer ts.Close()
+
+	conn := dialTestServer(t, ts)
+	defer conn.Close()
+	target := echo.Addr().String()
+	request := "CONNECT " + target + " HTTP/1.1\r\n" +
+		"Host: " + target + "\r\n" +
+		"Proxy-Authorization: " + basicHeader("u", "p") + "\r\n" +
+		"\r\n"
+	if _, err := io.WriteString(conn, request); err != nil {
+		t.Fatalf("write connect request: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	line := readStatusLine(t, reader)
+	if !strings.Contains(line, "200") {
+		t.Fatalf("status line = %q; want 200", line)
+	}
+	drainHeaders(t, reader)
+
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	if _, err := io.WriteString(conn, "ping"); err != nil {
+		t.Fatalf("write tunnel payload: %v", err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if string(buf) != "ping" {
+		t.Fatalf("echo = %q; want ping", string(buf))
+	}
+}
+
+func dialTestServer(t *testing.T, ts *httptest.Server) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial test server: %v", err)
+	}
+	return conn
+}
+
+func readStatusLine(t *testing.T, reader *bufio.Reader) string {
+	t.Helper()
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status line: %v", err)
+	}
+	return line
+}
+
+func drainHeaders(t *testing.T, reader *bufio.Reader) {
+	t.Helper()
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("drain headers: %v", err)
+		}
+		if line == "\r\n" {
+			return
+		}
+	}
+}
+
+type echoServer struct {
+	listener net.Listener
+}
+
+func newEchoServer(t *testing.T) *echoServer {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen echo server: %v", err)
+	}
+	es := &echoServer{listener: listener}
+	go es.serve()
+	return es
+}
+
+func (e *echoServer) Addr() net.Addr {
+	return e.listener.Addr()
+}
+
+func (e *echoServer) Close() error {
+	return e.listener.Close()
+}
+
+func (e *echoServer) serve() {
+	for {
+		conn, err := e.listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			if _, err := io.Copy(conn, conn); err != nil {
+				return
+			}
+		}()
+	}
 }
