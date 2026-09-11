@@ -118,7 +118,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 		s.writePlain(w, http.StatusBadGateway, "bad gateway")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Server", fakeServer)
@@ -153,7 +153,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		s.writePlain(w, http.StatusBadGateway, "bad gateway")
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 
 	controller := http.NewResponseController(w)
 	clientConn, buffered, err := controller.Hijack()
@@ -161,7 +161,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		s.logger.Debug("hijack failed", "err", err)
 		return
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	started := time.Now()
 	if _, err := io.WriteString(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {

@@ -165,7 +165,7 @@ func TestConnectRequiresAuth(t *testing.T) {
 	defer ts.Close()
 
 	conn := dialTestServer(t, ts)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if _, err := io.WriteString(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"); err != nil {
 		t.Fatalf("write connect request: %v", err)
 	}
@@ -179,13 +179,13 @@ func TestConnectRequiresAuth(t *testing.T) {
 
 func TestConnectTunnelEcho(t *testing.T) {
 	echo := newEchoServer(t)
-	defer echo.Close()
+	defer func() { _ = echo.Close() }()
 
 	ts := httptest.NewServer(newTestServer())
 	defer ts.Close()
 
 	conn := dialTestServer(t, ts)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	target := echo.Addr().String()
 	request := "CONNECT " + target + " HTTP/1.1\r\n" +
 		"Host: " + target + "\r\n" +
@@ -278,7 +278,7 @@ func (e *echoServer) serve() {
 			return
 		}
 		go func() {
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			if _, err := io.Copy(conn, conn); err != nil {
 				return
 			}
