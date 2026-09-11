@@ -83,9 +83,11 @@ func TestForwardRequiresAuth(t *testing.T) {
 }
 
 func TestForwardProxiesRequest(t *testing.T) {
-	var gotHost, gotProxyAuth, gotProxyConnection string
+	var gotHost, gotPath, gotQuery, gotProxyAuth, gotProxyConnection string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost = r.Host
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
 		gotProxyAuth = r.Header.Get("Proxy-Authorization")
 		gotProxyConnection = r.Header.Get("Proxy-Connection")
 		w.Header().Set("X-Upstream", "yes")
@@ -125,6 +127,12 @@ func TestForwardProxiesRequest(t *testing.T) {
 	}
 	if gotHost == "" {
 		t.Fatal("upstream saw empty Host")
+	}
+	if gotPath != "/path" {
+		t.Fatalf("path = %q; want /path", gotPath)
+	}
+	if gotQuery != "q=1" {
+		t.Fatalf("query = %q; want q=1", gotQuery)
 	}
 }
 

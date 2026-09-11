@@ -101,6 +101,10 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 	outReq.Header = r.Header.Clone()
 	stripHopHeaders(outReq.Header)
 	outReq.Host = r.URL.Host
+	// NewRequestWithContext infers Content-Length from the body type, not the
+	// cloned header, so body-carrying forwards would be re-framed as chunked;
+	// carry the original value explicitly.
+	outReq.ContentLength = r.ContentLength
 
 	resp, err := s.client.Do(outReq)
 	if err != nil {
