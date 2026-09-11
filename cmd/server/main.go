@@ -91,7 +91,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	cfg.port = port
 	if cfg.authUser == "" || cfg.authPass == "" {
-		return config{}, errors.New("auth_user and auth_pass are required; refusing to start an open proxy")
+		return config{}, errors.New("AUTH_USER and AUTH_PASS are required; refusing to start an open proxy")
 	}
 	return cfg, nil
 }

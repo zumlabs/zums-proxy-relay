@@ -36,6 +36,20 @@ func TestPublicSurface(t *testing.T) {
 			wantBody:   "ok",
 		},
 		{
+			name:       "head landing is public",
+			method:     http.MethodHead,
+			path:       "/",
+			wantStatus: http.StatusOK,
+			wantBody:   "Welcome to nginx!",
+		},
+		{
+			name:       "head health is public",
+			method:     http.MethodHead,
+			path:       "/health",
+			wantStatus: http.StatusOK,
+			wantBody:   "ok",
+		},
+		{
 			name:       "unknown path",
 			method:     http.MethodGet,
 			path:       "/missing",

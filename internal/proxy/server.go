@@ -62,15 +62,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleForward(w, r)
 		return
 	}
-	if r.Method == http.MethodGet && r.URL.Path == "/" {
+	if isPublicRead(r.Method) && r.URL.Path == "/" {
 		s.writeHTML(w, http.StatusOK, landingHTML)
 		return
 	}
-	if r.Method == http.MethodGet && r.URL.Path == "/health" {
+	if isPublicRead(r.Method) && r.URL.Path == "/health" {
 		s.writePlain(w, http.StatusOK, "ok")
 		return
 	}
 	s.writeHTML(w, http.StatusNotFound, notFoundHTML)
+}
+
+// Scanners probe GET and HEAD; treating HEAD like GET keeps the nginx
+// disguise intact. Anything else (POST, PUT, ...) stays a 404.
+func isPublicRead(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
 }
 
 func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +214,11 @@ func copyIdle(dst io.Writer, src net.Conn, idle time.Duration) (int64, error) {
 		// active tunnels are never killed; only 30s of silence times out.
 		if err := src.SetReadDeadline(time.Now().Add(idle)); err != nil {
 			return total, err
+		}
+		if c, ok := dst.(net.Conn); ok {
+			if err := c.SetWriteDeadline(time.Now().Add(idle)); err != nil {
+				return total, err
+			}
 		}
 		n, readErr := src.Read(buf)
 		if n > 0 {
