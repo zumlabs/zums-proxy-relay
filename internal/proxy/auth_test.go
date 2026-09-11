@@ -7,7 +7,7 @@ import (
 )
 
 func TestAuthenticatorAuthorized(t *testing.T) {
-	auth := newAuthenticator("buffrelay1", "s3cret")
+	auth := newAuthenticator("relayuser", "s3cret")
 	tests := []struct {
 		name   string
 		header string
@@ -15,7 +15,7 @@ func TestAuthenticatorAuthorized(t *testing.T) {
 	}{
 		{
 			name:   "valid credentials",
-			header: basicHeader("buffrelay1", "s3cret"),
+			header: basicHeader("relayuser", "s3cret"),
 			want:   true,
 		},
 		{
@@ -25,7 +25,7 @@ func TestAuthenticatorAuthorized(t *testing.T) {
 		},
 		{
 			name:   "wrong password",
-			header: basicHeader("buffrelay1", "wrong"),
+			header: basicHeader("relayuser", "wrong"),
 			want:   false,
 		},
 		{
@@ -45,12 +45,12 @@ func TestAuthenticatorAuthorized(t *testing.T) {
 		},
 		{
 			name:   "payload without colon",
-			header: "Basic " + base64.StdEncoding.EncodeToString([]byte("buffrelay1")),
+			header: "Basic " + base64.StdEncoding.EncodeToString([]byte("relayuser")),
 			want:   false,
 		},
 		{
 			name:   "scheme case insensitive",
-			header: "basic " + base64.StdEncoding.EncodeToString([]byte("buffrelay1:s3cret")),
+			header: "basic " + base64.StdEncoding.EncodeToString([]byte("relayuser:s3cret")),
 			want:   true,
 		},
 	}
